@@ -66,6 +66,8 @@ Lee el target SSH, el directorio, el proceso y la rama del `ecosystem.config.js`
 
 **En el primer deploy te pregunta si tu servicio expone un endpoint de salud y en qué URL**, y lo guarda en `.llantas.json` (`healthUrl`). Si lo configurás, verifica ahí (200) tras cada deploy — verificación **fuerte**: caza un servicio que arrancó pero responde 500.
 
+La verificación corre con **`curl` DENTRO del server, por SSH** (no un fetch desde tu máquina). Por eso el `healthUrl` puede ser **loopback** (`http://127.0.0.1:3999/salud`) apuntando al servicio real, sin necesidad de exponer el puerto públicamente. Requiere `curl` instalado en el server (lo está en casi cualquier Linux).
+
 Si lo saltás, cae al **fallback débil**: solo confirma que el proceso quedó `online` en PM2. **Ojo:** ese fallback nunca hace HTTP, así que **no distingue "vivo" de "vivo pero roto"** — un deploy que sirve 500 lo daría por bueno. Por eso, cuando la verificación es débil:
 
 - Las Llantas lo **grita** con una advertencia imposible de perder (no una nota al pie), y

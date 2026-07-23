@@ -4,11 +4,20 @@ import { createPm2Deployer, type Pm2DeployerDeps } from '../src/deployers/pm2.js
 const noSleep = async () => {};
 const online = [{ name: 'demo', pm2_env: { status: 'online' } }];
 
-/** runRemote falso: responde según el comando (rev-parse / pm2 jlist / secuencia). */
-function fakeRemote(opts: { seqCode?: number; commit?: string; jlist?: unknown[] } = {}) {
+/**
+ * runRemote falso: responde según el comando remoto. `curl` devuelve el http_code
+ * (la verificación de /salud corre por SSH DENTRO del server, no como fetch local).
+ */
+function fakeRemote(
+  opts: { seqCode?: number; commit?: string; jlist?: unknown[]; httpStatus?: number | (() => number) } = {},
+) {
   const commands: string[] = [];
   const run = async (cmd: string) => {
     commands.push(cmd);
+    if (cmd.includes('curl')) {
+      const s = typeof opts.httpStatus === 'function' ? opts.httpStatus() : opts.httpStatus ?? 200;
+      return { code: 0, stdout: String(s) };
+    }
     if (cmd.includes('rev-parse')) return { code: 0, stdout: `${opts.commit ?? 'a1b2c3d4e5f6'}\n` };
     if (cmd.includes('pm2 jlist')) return { code: 0, stdout: JSON.stringify(opts.jlist ?? []) };
     return { code: opts.seqCode ?? 0, stdout: '' };
@@ -19,7 +28,6 @@ function fakeRemote(opts: { seqCode?: number; commit?: string; jlist?: unknown[]
 function deps(over: Partial<Pm2DeployerDeps> = {}, remote = fakeRemote()): Pm2DeployerDeps {
   return {
     runRemote: remote.run,
-    httpGet: async () => ({ status: 200 }),
     remoteDir: '/var/www/demo',
     processName: 'demo',
     branch: 'main',
@@ -40,6 +48,7 @@ function gitStateRemote(opts: { commit?: string; jlist?: unknown[] } = {}) {
   const commands: string[] = [];
   const run = async (cmd: string) => {
     commands.push(cmd);
+    if (cmd.includes('curl')) return { code: 0, stdout: '200' }; // re-verify del rollback: /salud sano
     if (cmd.includes('pm2 jlist')) return { code: 0, stdout: JSON.stringify(opts.jlist ?? []) };
     for (const part of cmd.split('&&').map((p) => p.trim())) {
       if (part.startsWith('git checkout ')) {
@@ -91,17 +100,45 @@ describe('pm2 deployer — deploy (§6)', () => {
 });
 
 describe('pm2 deployer — verify (§6)', () => {
+  it('verifica DENTRO del server por SSH (curl), NO con fetch local → un healthUrl loopback tiene sentido', async () => {
+    const remote = fakeRemote({ httpStatus: 200 });
+    const d = createPm2Deployer(deps({ healthUrl: 'http://127.0.0.1:3999/salud' }, remote));
+    const r = await d.verify({ ok: true });
+
+    expect(r.ok).toBe(true);
+    const curlCmd = remote.commands.find((c) => c.includes('curl'));
+    expect(curlCmd).toBeTruthy(); // corrió curl POR SSH, no un fetch desde la máquina local
+    expect(curlCmd).toContain("'http://127.0.0.1:3999/salud'"); // quoteado, apunta al loopback DEL server
+    expect(curlCmd).toContain('--max-time'); // acota el request en el server
+  });
+
   it('/salud responde 200 → ok, verificación FUERTE (no weak)', async () => {
-    const d = createPm2Deployer(deps({ httpGet: async () => ({ status: 200 }) }));
+    const d = createPm2Deployer(deps({}, fakeRemote({ httpStatus: 200 })));
     const r = await d.verify({ ok: true });
     expect(r.ok).toBe(true);
     expect(r.weak).toBeFalsy();
   });
 
-  it('/salud 503 tras reintentos → not ok', async () => {
-    const d = createPm2Deployer(deps({ httpGet: async () => ({ status: 503 }) }));
+  it('seguridad: healthUrl que no es http(s):// → NO arma el comando curl (se trata como fallo)', async () => {
+    const remote = fakeRemote();
+    // Intento de colar una opción de curl vía un valor con guion inicial.
+    const d = createPm2Deployer(deps({ healthUrl: '-oProxyCommand=calc' }, remote));
     const r = await d.verify({ ok: true });
     expect(r.ok).toBe(false);
+    expect(remote.commands.some((c) => c.includes('curl'))).toBe(false); // nunca ejecutó curl con ese valor
+  });
+
+  it('/salud 503 tras reintentos → not ok', async () => {
+    const d = createPm2Deployer(deps({}, fakeRemote({ httpStatus: 503 })));
+    expect((await d.verify({ ok: true })).ok).toBe(false);
+  });
+
+  it('/salud colgado en el server → curl devuelve "000" (timeout) → verify NO se cuelga: reintenta y declara fallo', async () => {
+    const remote = fakeRemote({ httpStatus: 0 }); // curl --max-time no obtuvo respuesta
+    const d = createPm2Deployer(deps({}, remote));
+    const r = await d.verify({ ok: true });
+    expect(r.ok).toBe(false); // no cuelga (el timeout vive en curl, en el server)
+    expect(remote.commands.filter((c) => c.includes('curl')).length).toBe(2); // reintentó (attempts: 2)
   });
 
   it('sin /salud → fallback de estado PM2 online, marcado weak:true (no distingue vivo de vivo-pero-roto)', async () => {
@@ -113,15 +150,12 @@ describe('pm2 deployer — verify (§6)', () => {
     expect(r.detail).toBeTruthy();
   });
 
-  it('sin /salud → NUNCA hace un GET HTTP (no adivina una URL del sshTarget), va directo al fallback PM2', async () => {
-    let httpCalls = 0;
+  it('sin /salud → NO corre curl, va directo al fallback de estado PM2', async () => {
     const remote = fakeRemote({ jlist: online });
-    const d = createPm2Deployer(
-      deps({ healthUrl: undefined, httpGet: async () => { httpCalls++; return { status: 200 }; } }, remote),
-    );
+    const d = createPm2Deployer(deps({ healthUrl: undefined }, remote));
     const r = await d.verify({ ok: true });
-    expect(httpCalls).toBe(0); // no intentó ninguna URL HTTP
-    expect(r.ok).toBe(true); // usó el estado PM2
+    expect(r.ok).toBe(true);
+    expect(remote.commands.some((c) => c.includes('curl'))).toBe(false); // no intentó ningún /salud
     expect(remote.commands.some((c) => c.includes('pm2 jlist'))).toBe(true);
   });
 
@@ -141,8 +175,8 @@ describe('pm2 deployer — rollback vía lastGoodCommit (§6, §9)', () => {
   });
 
   it('con lastGoodCommit → vuelve a la rama + reset --hard al commit + reinstala + reinicia + RE-verifica → ok true', async () => {
-    const remote = fakeRemote();
-    const d = createPm2Deployer(deps({ lastGoodCommit: 'a1b2c3d4', httpGet: async () => ({ status: 200 }) }, remote));
+    const remote = fakeRemote(); // curl → 200 por default (re-verify sano)
+    const d = createPm2Deployer(deps({ lastGoodCommit: 'a1b2c3d4' }, remote));
     const r = await d.rollback();
     expect(r).toMatchObject({ attempted: true, ok: true });
     const seq = remote.commands.find((c) => c.includes('git reset'))!;
@@ -152,7 +186,7 @@ describe('pm2 deployer — rollback vía lastGoodCommit (§6, §9)', () => {
 
   it('después de un rollback, un deploy normal SÍ funciona (vuelve a la rama, no detached HEAD)', async () => {
     const remote = gitStateRemote();
-    const d = createPm2Deployer(deps({ lastGoodCommit: 'a1b2c3d4', httpGet: async () => ({ status: 200 }) }, remote));
+    const d = createPm2Deployer(deps({ lastGoodCommit: 'a1b2c3d4' }, remote));
 
     const rollback = await d.rollback();
     expect(rollback.ok).toBe(true);
@@ -170,7 +204,7 @@ describe('pm2 deployer — rollback vía lastGoodCommit (§6, §9)', () => {
   });
 
   it('rollback aplicado pero la re-verificación falla → attempted true, ok false (no falla en silencio)', async () => {
-    const d = createPm2Deployer(deps({ lastGoodCommit: 'a1b2c3d4', httpGet: async () => ({ status: 503 }) }));
+    const d = createPm2Deployer(deps({ lastGoodCommit: 'a1b2c3d4' }, fakeRemote({ httpStatus: 503 })));
     const r = await d.rollback();
     expect(r).toMatchObject({ attempted: true, ok: false });
     expect(r.detail).toBeTruthy();

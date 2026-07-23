@@ -237,7 +237,6 @@ async function runPm2Flow(
 
   const deployer = createPm2Deployer({
     runRemote,
-    httpGet: deps.httpGet,
     remoteDir,
     processName,
     branch,

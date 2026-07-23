@@ -89,7 +89,8 @@ export async function runDeploy(deps: PipelineDeps): Promise<PipelineResult> {
     return { ok: false, stage: 'deploy', gate, deploy };
   }
 
-  // Fase 3 — verificación real (el deployer aplica sus reintentos).
+  // Fase 3 — verificación real (el deployer aplica sus reintentos, con timeout por request).
+  deps.log('🔍 Verificando el deploy… (con reintentos cortos y timeout, no se cuelga)');
   const verify = await deps.deployer.verify(deploy);
   if (verify.ok) {
     if (verify.weak) {

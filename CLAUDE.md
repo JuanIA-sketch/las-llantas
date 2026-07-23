@@ -28,6 +28,7 @@ node bin/las-llantas.js --dry-run   # el binario real
 
 ## Decisiones resueltas (no re-litigar)
 - Escaneo de secretos = `detectSecrets` de La Alarma (`src/core/secret-patterns.ts`, vendorizado de la-alarma@0.1.1) sobre el working tree — NO gitleaks, sin dependencia nueva.
+- La verificación de PM2 corre `curl` DENTRO del server por SSH (no fetch local), así el `healthUrl` puede ser loopback (127.0.0.1) sin exponer el puerto. `curl --max-time` acota el request en el server (no se cuelga). Vercel sí usa fetch local (su URL de prod es pública).
 - VPS sin `/salud`: verificación DÉBIL (fallback de estado PM2 online, marcado `weak:true`). El primer deploy PM2 pregunta por el endpoint de salud. Una verificación débil se avisa PROMINENTE **y NO avanza `lastGoodCommit`** (el puntero de rollback solo se mueve con verificación fuerte — seguridad estructural, no dependiente de leer el aviso).
 - Estado en dos archivos por ciclo de vida: `.llantas.json` (COMMITEADO: type, npmIdentityConfirmed, vercelDeployedOnce, healthUrl — set-once) y `.llantas.state.json` (GITIGNOREADO: lastGoodCommit, mutable cada deploy). Separados para que un deploy PM2 no ensucie el working tree y rompa el git-clean del siguiente. El target SSH sale del `ecosystem.config.js`, no se guarda en ninguno.
 - Rollback PM2 vuelve a la RAMA (`git checkout <branch> && git reset --hard <commit>`), no a un SHA suelto (evita detached HEAD que rompería el próximo `git pull --ff-only`).

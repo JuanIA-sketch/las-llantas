@@ -20,8 +20,6 @@ import type { VerifyRetry } from './vercel.js';
 export interface Pm2DeployerDeps {
   /** Corre un comando en el server remoto (SSH ya configurado). */
   runRemote: (command: string) => Promise<{ code: number; stdout: string }>;
-  /** GET al endpoint de salud; puede tirar si no conecta. */
-  httpGet: (url: string) => Promise<{ status: number }>;
   /** Directorio del proyecto en el server. */
   remoteDir: string;
   /** Nombre del proceso PM2. */
@@ -41,9 +39,17 @@ const DEFAULT_RETRY: VerifyRetry = { attempts: 3, delayMs: 2000 };
 const SAFE_NAME = /^[\w.-]+$/;
 const SAFE_BRANCH = /^[\w./-]+$/;
 const SAFE_REF = /^[0-9a-fA-F]{7,40}$/;
+const SAFE_HEALTH_URL = /^https?:\/\//i;
 
 function assertName(name: string): void {
   if (!SAFE_NAME.test(name)) throw new Error(`Nombre de proceso PM2 no válido: ${JSON.stringify(name)}`);
+}
+/** El healthUrl va escapado (quoteRemoteArg); además exigimos que sea http(s):// para que no
+ *  pueda colarse como una opción de curl (ej. un valor que empiece con `-`). */
+function assertHealthUrl(url: string): void {
+  if (!SAFE_HEALTH_URL.test(url)) {
+    throw new Error(`healthUrl debe empezar con http:// o https://: ${JSON.stringify(url)}`);
+  }
 }
 function assertBranch(branch: string): void {
   if (!SAFE_BRANCH.test(branch)) throw new Error(`Nombre de rama no válido: ${JSON.stringify(branch)}`);
@@ -55,9 +61,10 @@ function assertRef(ref: string): void {
  * Escapado POSIX canónico para el shell del server (Linux): envuelve en comillas
  * simples y transforma cada comilla simple interna en `'\''`. Maneja correctamente
  * un valor con comilla simple literal adentro (sin romper ni permitir inyección).
+ * Se usa para el directorio remoto y para la URL del /salud.
  */
-function quoteDir(dir: string): string {
-  return `'${dir.replace(/'/g, "'\\''")}'`;
+function quoteRemoteArg(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 interface Pm2Process {
@@ -68,12 +75,28 @@ interface Pm2Process {
 export function createPm2Deployer(deps: Pm2DeployerDeps): Deployer {
   const retry = deps.retry ?? DEFAULT_RETRY;
 
+  /**
+   * Chequea la salud DENTRO del server, por SSH, con `curl`. NO es un fetch desde la
+   * máquina local: así un `healthUrl` loopback (ej. http://127.0.0.1:3999/salud) apunta
+   * al loopback del SERVIDOR — el servicio real — y no hay que exponer el puerto
+   * públicamente. `--max-time` acota el request en el server; si no responde, curl
+   * escribe "000" → status 0 → no 200 → reintenta/falla (no se cuelga).
+   */
+  async function remoteHttpStatus(url: string): Promise<{ status: number }> {
+    assertHealthUrl(url);
+    const res = await deps.runRemote(
+      `curl -s -o /dev/null -w '%{http_code}' --max-time 5 ${quoteRemoteArg(url)}`,
+    );
+    const status = Number.parseInt(res.stdout.trim(), 10);
+    return { status: Number.isNaN(status) ? 0 : status };
+  }
+
   /** Verificación de salud, compartida por verify() y el re-check del rollback. */
   async function verifyHealth(): Promise<VerifyResult> {
     if (deps.healthUrl) {
       const url = deps.healthUrl;
       try {
-        const res = await withRetries(() => deps.httpGet(url), {
+        const res = await withRetries(() => remoteHttpStatus(url), {
           attempts: retry.attempts,
           delayMs: retry.delayMs,
           sleep: retry.sleep,
@@ -119,7 +142,7 @@ export function createPm2Deployer(deps: Pm2DeployerDeps): Deployer {
   return {
     async deploy(): Promise<DeployOutcome> {
       assertName(deps.processName);
-      const dir = quoteDir(deps.remoteDir);
+      const dir = quoteRemoteArg(deps.remoteDir);
 
       const steps = [`cd ${dir}`, 'git pull --ff-only', 'npm install'];
       if (deps.hasBuild) steps.push('npm run build');
@@ -152,7 +175,7 @@ export function createPm2Deployer(deps: Pm2DeployerDeps): Deployer {
       assertRef(deps.lastGoodCommit);
       assertName(deps.processName);
       assertBranch(deps.branch);
-      const dir = quoteDir(deps.remoteDir);
+      const dir = quoteRemoteArg(deps.remoteDir);
 
       // Volver a parar sobre la RAMA en el commit bueno (no un checkout suelto del SHA,
       // que dejaría detached HEAD y rompería el `git pull --ff-only` del próximo deploy).

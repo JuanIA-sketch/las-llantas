@@ -43,7 +43,11 @@ function scriptedPrompt(answers: string[] = [], confirmValue: boolean | boolean[
   };
 }
 
-function makeDeps(cwd: string, over: Partial<CliDeps> = {}): { deps: CliDeps; log: string[]; calls: any } {
+function makeDeps(
+  cwd: string,
+  over: Partial<CliDeps> = {},
+  pm2HealthStatus = 200,
+): { deps: CliDeps; log: string[]; calls: any } {
   const log: string[] = [];
   const calls = { vercel: [] as string[][], http: [] as string[], ssh: [] as string[], npm: [] as string[][] };
   // Registro npm simulado: `npm publish` mueve la versión publicada a la local.
@@ -72,6 +76,8 @@ function makeDeps(cwd: string, over: Partial<CliDeps> = {}): { deps: CliDeps; lo
     httpGet: async (url) => { calls.http.push(url); return { status: 200 }; },
     sshRunner: (_target) => async (command) => {
       calls.ssh.push(command);
+      // La verificación de /salud corre por SSH DENTRO del server (curl), no como fetch local.
+      if (command.includes('curl')) return { code: 0, stdout: String(pm2HealthStatus) };
       if (command.includes('rev-parse')) return { code: 0, stdout: 'a1b2c3d4e5f6\n' };
       if (command.includes('pm2 jlist')) {
         return { code: 0, stdout: JSON.stringify([{ name: 'demo', pm2_env: { status: 'online' } }]) };
@@ -213,7 +219,9 @@ describe('cli — flujo VPS+PM2 de punta a punta (ecosystem real detectado, bord
     expect(code).toBe(0);
     expect(calls.ssh.some((c: string) => c.includes('git pull'))).toBe(true); // desplegó en el server
     expect(calls.ssh).toContain('echo llantas-ok'); // corrió el check de SSH del gate
-    expect(calls.http).toContain('https://demo.example.com/salud'); // verificó por HTTP (fuerte)
+    // Verificación FUERTE: curl por SSH DENTRO del server (no fetch local), contra el /salud.
+    expect(calls.ssh.some((c: string) => c.includes('curl') && c.includes('https://demo.example.com/salud'))).toBe(true);
+    expect(calls.http).toHaveLength(0); // el flujo PM2 NO hace fetch local
     // El puntero de rollback va al estado MUTABLE gitignoreado, NO al .llantas.json commiteado.
     expect(await readLlantasState(dir)).toMatchObject({ lastGoodCommit: 'a1b2c3d4e5f6' });
     expect(await readLlantas(dir)).toMatchObject({ healthUrl: 'https://demo.example.com/salud' });
@@ -241,7 +249,7 @@ describe('cli — flujo VPS+PM2 de punta a punta (ecosystem real detectado, bord
     const dir = await makePm2Project();
     // Saltamos /salud ('') → fallback débil. La app está rota (500), pero el fallback no consulta HTTP.
     const { prompt } = scriptedPrompt([''], true);
-    const { deps, log } = makeDeps(dir, { prompt, httpGet: async () => ({ status: 500 }) });
+    const { deps, log } = makeDeps(dir, { prompt }, 500);
 
     const code = await runCli([], deps);
 
@@ -273,9 +281,9 @@ describe('cli — flujo VPS+PM2 de punta a punta (ecosystem real detectado, bord
 
   it('el fix en acción: con /salud configurado en el primer deploy, un 500 hace fallar la verificación FUERTE (no lo acepta)', async () => {
     const dir = await makePm2Project();
-    // Esta vez SÍ damos la URL de salud; la app devuelve 500.
+    // Esta vez SÍ damos la URL de salud; la app devuelve 500 (curl por SSH la ve).
     const { prompt } = scriptedPrompt(['https://demo.example.com/salud'], true);
-    const { deps } = makeDeps(dir, { prompt, httpGet: async () => ({ status: 500 }) });
+    const { deps } = makeDeps(dir, { prompt }, 500);
 
     const code = await runCli([], deps);
 

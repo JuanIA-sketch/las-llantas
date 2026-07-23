@@ -87,11 +87,12 @@ describe('runDeploy — orquestador de las 3 fases (§6, §8, §9)', () => {
   });
 
   it('happy path: gate ok + deploy ok + verify ok → persiste (onVerified) y termina en done', async () => {
-    const { deps, flags } = makeDeps();
+    const { deps, log, flags } = makeDeps();
     const r = await runDeploy(deps);
 
     expect(r).toMatchObject({ ok: true, stage: 'done' });
     expect(flags.onVerified).toBe(1);
+    expect(log.join('\n')).toMatch(/Verificando/); // progreso visible al entrar en verify
   });
 
   it('verify DÉBIL (weak) aunque sea ok → advertencia PROMINENTE y NO persiste (no avanza el puntero de rollback)', async () => {
