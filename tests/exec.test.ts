@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isShellSafeArg, runCommand } from '../src/runners/exec.js';
+import { isShellSafeArg, runCommand, runCommandInheritStdio } from '../src/runners/exec.js';
 
 // Guardia contra inyección de comandos: con shell:true (necesario en Windows para
 // resolver npm.cmd/vercel.cmd), Node concatena los args en la línea del shell SIN
@@ -36,6 +36,17 @@ describe('isShellSafeArg — barrera contra inyección de comandos', () => {
 describe('runCommand — no ejecuta un argumento inyectado como comando separado', () => {
   it('un arg con metacaracteres de shell hace throw ANTES de lanzar el proceso', async () => {
     await expect(runCommand('echo', ['ok & echo INJECTED'])).rejects.toThrow(
+      /inyecci|no permitid|shell|seguro/i,
+    );
+  });
+});
+
+// `npm publish` corre con stdio HEREDADO (stdin/stdout/stderr conectados a la terminal
+// real) para que una confirmación interactiva de npm le llegue a la persona. Ese runner
+// no captura salida, pero mantiene la MISMA barrera de inyección que runCommand.
+describe('runCommandInheritStdio — hereda stdio pero mantiene la barrera de inyección', () => {
+  it('un arg con metacaracteres de shell hace throw ANTES de lanzar el proceso', async () => {
+    await expect(runCommandInheritStdio('echo', ['ok & echo INJECTED'])).rejects.toThrow(
       /inyecci|no permitid|shell|seguro/i,
     );
   });

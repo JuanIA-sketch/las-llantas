@@ -26,7 +26,7 @@ Los 3 targets reales del ecosistema — y nada más (Docker/K8s/AWS quedan fuera
 - Las Llantas **nunca gestiona credenciales**. Lee de lo que ya tenés configurado:
   - **Vercel:** la CLI de Vercel logueada (`vercel login`).
   - **VPS + PM2:** acceso SSH por llave ya configurado al server del `ecosystem.config.js`.
-  - **npm:** `npm login` ya hecho.
+  - **npm:** `npm login` ya hecho. Si tu cuenta exige confirmación interactiva en cada publish, ese prompt te llega en el momento (ver [npm publish](#npm-publish)).
 - Si algo no está configurado, falla honesto con instrucciones — no intenta resolverlo por su cuenta.
 
 ## Instalación
@@ -81,6 +81,15 @@ El pre-flight más estricto, porque **publicar no tiene vuelta atrás**:
 - **Bloquea** si estás por republicar la misma versión.
 - La **primera** vez confirma la identidad del paquete (una sola pregunta, se recuerda).
 - **Siempre** pide confirmación explícita antes de `npm publish` — pregunta separada de la anterior.
+
+#### Cuentas con confirmación interactiva en cada publish
+
+Algunas cuentas de npm exigen, por seguridad, una **confirmación interactiva por navegador (u OTP) en CADA `npm publish`** — no solo en el `npm login`. Las Llantas corre `npm publish` **heredando el stdio real de tu terminal** (stdin/stdout/stderr conectados, no capturados en un pipe). Por eso, si tu cuenta tiene esa protección activada:
+
+- El prompt de npm **te aparece en la terminal en el momento** y lo respondés ahí, igual que la confirmación propia de Las Llantas.
+- **Esto es esperado, no es un error.** Si publicar "se cuelga" esperando, es npm pidiéndote esa confirmación — respondela y el flujo sigue.
+
+> Detalle técnico: si `npm publish` se ejecutara con la salida capturada en un pipe (como el resto de los comandos), ese prompt no le llegaría a nadie y el publish fallaría de forma genérica o quedaría colgado. Por eso este comando —y solo este— hereda el stdio real. La verificación posterior se hace aparte con `npm view`.
 
 ## Estado en disco: dos archivos por ciclo de vida
 

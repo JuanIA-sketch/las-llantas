@@ -9,7 +9,7 @@
  * a lenguaje simple la hace errors.ts/cli.ts.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 
 export interface ExecResult {
   code: number;
@@ -78,6 +78,48 @@ export async function runCommand(command: string, args: string[], options: ExecO
     );
   });
 }
+
+/**
+ * Corre `command args...` HEREDANDO el stdio real del proceso (stdin/stdout/stderr
+ * conectados a la terminal de la persona), en vez de capturarlo en pipes como
+ * runCommand. Se usa para `npm publish`: hay cuentas de npm que exigen una
+ * confirmación interactiva (navegador/OTP) en CADA publish, no solo en el login. Si
+ * ese prompt cae en un pipe capturado, no le llega a nadie y npm se cuelga o falla
+ * genérico. Heredando stdio, la confirmación aparece en la terminal y la persona la
+ * responde en el momento — igual que el prompt propio de Las Llantas.
+ *
+ * No devuelve stdout (va directo a la terminal, no se captura); la verificación
+ * post-publish se hace aparte con `npm view`. Mantiene la MISMA barrera de inyección
+ * que runCommand (assertShellSafe), porque también usa shell en Windows.
+ */
+export async function runCommandInheritStdio(
+  command: string,
+  args: string[],
+  options: ExecOptions = {},
+): Promise<{ code: number }> {
+  assertShellSafe(command, args);
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      shell: process.platform === 'win32',
+      stdio: 'inherit',
+    });
+    child.on('error', (err) => {
+      // El binario no se pudo lanzar (ENOENT, etc.): la traducción a lenguaje simple
+      // la hace errors.ts/cli.ts, igual que en runCommand.
+      reject(err);
+    });
+    child.on('close', (code) => {
+      // Salida normal (incluye exit ≠ 0): la capa de arriba decide según el code.
+      resolve({ code: code ?? 0 });
+    });
+  });
+}
+
+/** Runner de `npm publish` atado a un cwd, con stdio heredado (matchea CliDeps.runPublish). */
+export const nodeRunPublish = async (cwd: string): Promise<{ code: number }> => {
+  return runCommandInheritStdio('npm', ['publish'], { cwd });
+};
 
 /** Runner de comandos genérico (matchea RunTestsDeps.runCommand). */
 export const nodeRunCommand = async (cwd: string, command: string, args: string[]): Promise<{ code: number }> => {

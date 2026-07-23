@@ -17,8 +17,12 @@ import type { VerifyRetry } from './vercel.js';
 export interface NpmDeployerDeps {
   /** Versión local (de package.json). */
   localVersion: string;
-  /** Corre `npm publish`. */
-  runPublish: () => Promise<{ code: number; stdout: string }>;
+  /**
+   * Corre `npm publish`. La impl real hereda el stdio de la terminal (no lo captura),
+   * así una confirmación interactiva de npm —que algunas cuentas exigen en cada publish—
+   * le llega a la persona. Por eso solo devuelve el exit code, no stdout.
+   */
+  runPublish: () => Promise<{ code: number }>;
   /** Mira el registro (`npm view <pkg> version`) para verificar el publish. */
   registryVersion: RegistryLookup;
   retry?: VerifyRetry;

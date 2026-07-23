@@ -6,7 +6,7 @@ const noSleep = async () => {};
 function deps(over: Partial<NpmDeployerDeps> = {}): NpmDeployerDeps {
   return {
     localVersion: '1.2.3',
-    runPublish: async () => ({ code: 0, stdout: '+ demo@1.2.3' }),
+    runPublish: async () => ({ code: 0 }),
     registryVersion: async () => ({ published: true, version: '1.2.3' }),
     retry: { attempts: 3, delayMs: 1, sleep: noSleep },
     ...over,
@@ -19,7 +19,7 @@ describe('npm deployer — deploy (§6)', () => {
   });
 
   it('npm publish falla → not ok con detalle', async () => {
-    const r = await createNpmDeployer(deps({ runPublish: async () => ({ code: 1, stdout: 'EPUBLISHERROR' }) })).deploy();
+    const r = await createNpmDeployer(deps({ runPublish: async () => ({ code: 1 }) })).deploy();
     expect(r.ok).toBe(false);
     expect(r.detail).toBeTruthy();
   });

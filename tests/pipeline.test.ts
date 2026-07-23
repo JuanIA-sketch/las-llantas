@@ -130,6 +130,63 @@ describe('runDeploy — orquestador de las 3 fases (§6, §8, §9)', () => {
     expect(r.rollback).toEqual({ attempted: true, ok: true });
   });
 
+  // Guardia contra un cuelgue por competencia de stdin: la confirmación (readline) y un
+  // subproceso interactivo con stdio heredado (npm publish) no pueden estar leyendo el
+  // mismo stdin a la vez. Por eso el pipeline SUELTA el input (cierra el readline) después
+  // de confirmar y ANTES de entrar a la fase de deploy.
+  it('libera el stdin (releaseInput) DESPUÉS de confirmar y ANTES de deploy — evita que el prompt de npm publish compita con el readline', async () => {
+    const order: string[] = [];
+    const deployer: Deployer = {
+      deploy: async () => { order.push('deploy'); return { ok: true, url: 'https://x.app' }; },
+      verify: async () => ({ ok: true, status: 200 }),
+      rollback: async () => ({ attempted: true, ok: true }),
+    };
+    const { deps } = makeDeps({
+      deployer,
+      needsConfirmation: true,
+      confirm: async () => { order.push('confirm'); return true; },
+      releaseInput: () => { order.push('release'); },
+    });
+
+    await runDeploy(deps);
+
+    expect(order).toEqual(['confirm', 'release', 'deploy']);
+  });
+
+  it('deploy de rutina (sin confirmación) igual suelta el stdin antes de deploy', async () => {
+    const order: string[] = [];
+    const deployer: Deployer = {
+      deploy: async () => { order.push('deploy'); return { ok: true }; },
+      verify: async () => ({ ok: true }),
+      rollback: async () => ({ attempted: false, ok: false }),
+    };
+    const { deps } = makeDeps({
+      deployer,
+      needsConfirmation: false,
+      releaseInput: () => { order.push('release'); },
+    });
+
+    await runDeploy(deps);
+
+    expect(order).toEqual(['release', 'deploy']);
+  });
+
+  it('si el usuario cancela en la confirmación, NO suelta el stdin ni despliega', async () => {
+    let released = false;
+    const { deployer, calls } = makeDeployer();
+    const { deps } = makeDeps({
+      deployer,
+      needsConfirmation: true,
+      confirm: async () => false,
+      releaseInput: () => { released = true; },
+    });
+
+    await runDeploy(deps);
+
+    expect(released).toBe(false); // no llegó a la fase de deploy
+    expect(calls.deploy).toBe(0);
+  });
+
   it('verify falla en primer deploy (rollback sin destino) → se reporta claro, sin persistir [§9]', async () => {
     const { deployer } = makeDeployer({
       verify: { ok: false, status: 503 },

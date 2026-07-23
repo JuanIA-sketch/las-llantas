@@ -39,6 +39,14 @@ export interface PipelineDeps {
   needsConfirmation: boolean;
   confirm: () => Promise<boolean>;
   dryRun: boolean;
+  /**
+   * Suelta el stdin que usó la confirmación (cierra el readline) justo antes de la fase
+   * de deploy. Necesario porque el deploy de npm lanza `npm publish` con stdio HEREDADO:
+   * si el readline de la confirmación siguiera abierto, competiría con el prompt
+   * interactivo de npm por el mismo stdin y colgaría. Opcional: los flujos sin
+   * subproceso interactivo (o los tests) pueden omitirlo.
+   */
+  releaseInput?: () => void | Promise<void>;
   /** Persiste el éxito (vercelDeployedOnce=true / lastGoodCommit). Solo tras verify OK. Recibe el deploy (ej. su commit). */
   onVerified: (deploy: DeployOutcome) => Promise<void>;
   log: (msg: string) => void;
@@ -81,6 +89,12 @@ export async function runDeploy(deps: PipelineDeps): Promise<PipelineResult> {
       return { ok: false, stage: 'confirm', gate, detail: 'cancelado por el usuario' };
     }
   }
+
+  // Soltar el stdin de la confirmación (cerrar el readline) ANTES de entrar al deploy:
+  // si la fase de deploy lanza un subproceso interactivo con stdio heredado (npm publish),
+  // su prompt no debe competir con nuestro readline por el mismo stdin (si no, cuelgue).
+  // Va después de confirmar y de un eventual cancel: si se canceló, ya salimos arriba.
+  await deps.releaseInput?.();
 
   // Fase 2 — deploy.
   const deploy = await deps.deployer.deploy();

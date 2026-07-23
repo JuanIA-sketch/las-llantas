@@ -48,13 +48,27 @@ export interface CliDeps {
   cwd: string;
   log: (msg: string) => void;
   prompt: Prompt;
+  /**
+   * Suelta el stdin del prompt (cierra el readline) antes de la fase de deploy. La impl
+   * real cierra el readline de `prompt`; así el `npm publish` con stdio heredado no compite
+   * con nuestro readline por el mismo stdin. Opcional: los tests con prompt guionado (sin
+   * readline real) lo omiten.
+   */
+  releaseInput?: () => void | Promise<void>;
   configFs: ConfigFs;
   listEntries: (cwd: string) => Promise<string[]>;
   readPackageJson: (cwd: string) => Promise<Record<string, unknown> | null>;
   scanFs: ScanFsDeps;
   runCommand: (cwd: string, command: string, args: string[]) => Promise<{ code: number }>;
-  /** Como runCommand pero devuelve stdout (para `npm view` / `npm publish`). */
+  /** Como runCommand pero devuelve stdout (para `npm view`, la verificación del registro). */
   runCommandOut: (cwd: string, command: string, args: string[]) => Promise<{ code: number; stdout: string }>;
+  /**
+   * Corre `npm publish` con stdio HEREDADO (no capturado en un pipe). Es distinto de
+   * runCommandOut a propósito: si la cuenta exige una confirmación interactiva en cada
+   * publish, ese prompt debe llegarle a la persona en su terminal. No captura stdout;
+   * el publish se verifica aparte con `npm view`.
+   */
+  runPublish: (cwd: string) => Promise<{ code: number }>;
   runGit: (cwd: string, args: string[]) => Promise<{ code: number; stdout: string }>;
   vercelRunner: (cwd: string) => (args: string[]) => Promise<{ code: number; stdout: string }>;
   httpGet: (url: string) => Promise<{ status: number }>;
@@ -157,6 +171,7 @@ async function runVercelFlow(
     deployer,
     needsConfirmation,
     confirm: () => deps.prompt.confirm('¿Despliego a producción en Vercel?'),
+    releaseInput: deps.releaseInput,
     dryRun,
     onVerified: async () => {
       await saveConfig(configPath, updateConfig(config, { vercelDeployedOnce: true }), deps.configFs);
@@ -250,6 +265,7 @@ async function runPm2Flow(
     deployer,
     needsConfirmation,
     confirm: () => deps.prompt.confirm('¿Despliego a producción en el VPS (PM2)?'),
+    releaseInput: deps.releaseInput,
     dryRun,
     onVerified: async (deploy) => {
       await saveState(statePath, updateState(state, { lastGoodCommit: deploy.commit }), deps.configFs);
@@ -309,7 +325,8 @@ async function runNpmFlow(
 
   const deployer = createNpmDeployer({
     localVersion: version,
-    runPublish: () => deps.runCommandOut(deps.cwd, 'npm', ['publish']),
+    // Publish con stdio heredado: una confirmación interactiva de npm llega a la terminal.
+    runPublish: () => deps.runPublish(deps.cwd),
     registryVersion: registryLookup,
   });
 
@@ -318,6 +335,9 @@ async function runNpmFlow(
     deployer,
     needsConfirmation: true, // npm: SIEMPRE confirma antes de publicar, sin excepción
     confirm: () => deps.prompt.confirm(`¿Publico ${name}@${version} en npm? (no tiene vuelta atrás)`),
+    // Cierra el readline de la confirmación ANTES de spawnear `npm publish` (stdio heredado):
+    // si no, ambos competirían por el mismo stdin y el prompt interactivo de npm colgaría.
+    releaseInput: deps.releaseInput,
     dryRun,
     onVerified: async () => {
       /* npm no persiste puntero de rollback: no hay a dónde volver */
@@ -346,7 +366,7 @@ export async function main(argv: string[], cwd: string): Promise<number> {
   const { realConfigFs, listEntries, readPackageJson, listScannableFiles, readTextFile } = await import(
     './runners/fs.js'
   );
-  const { nodeRunCommand, nodeRunCommandOut, gitRunner, vercelRunner } = await import('./runners/exec.js');
+  const { nodeRunCommand, nodeRunCommandOut, nodeRunPublish, gitRunner, vercelRunner } = await import('./runners/exec.js');
   const { httpGet } = await import('./runners/http.js');
   const { sshRunner } = await import('./runners/ssh.js');
   const { createReadlinePrompt } = await import('./prompt.js');
@@ -357,12 +377,16 @@ export async function main(argv: string[], cwd: string): Promise<number> {
       cwd,
       log: (m) => console.log(m),
       prompt,
+      // Cerrar el readline libera el stdin ANTES de `npm publish` (stdio heredado). Es
+      // idempotente con el prompt.close() del finally, que queda como red de seguridad.
+      releaseInput: () => prompt.close(),
       configFs: realConfigFs,
       listEntries,
       readPackageJson,
       scanFs: { listFiles: listScannableFiles, readFile: readTextFile },
       runCommand: nodeRunCommand,
       runCommandOut: nodeRunCommandOut,
+      runPublish: nodeRunPublish,
       runGit: gitRunner,
       vercelRunner,
       httpGet,

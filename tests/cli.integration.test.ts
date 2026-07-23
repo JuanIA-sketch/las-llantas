@@ -49,7 +49,13 @@ function makeDeps(
   pm2HealthStatus = 200,
 ): { deps: CliDeps; log: string[]; calls: any } {
   const log: string[] = [];
-  const calls = { vercel: [] as string[][], http: [] as string[], ssh: [] as string[], npm: [] as string[][] };
+  const calls = {
+    vercel: [] as string[][],
+    http: [] as string[],
+    ssh: [] as string[],
+    npm: [] as string[][],
+    publish: 0, // veces que se corrió `npm publish` por el runner de stdio heredado
+  };
   // Registro npm simulado: `npm publish` mueve la versión publicada a la local.
   let registryVersion = '1.2.2';
   const deps: CliDeps = {
@@ -65,8 +71,13 @@ function makeDeps(
     runCommandOut: async (_cwd, _command, args) => {
       calls.npm.push(args);
       if (args[0] === 'view') return { code: 0, stdout: `${registryVersion}\n` };
-      if (args[0] === 'publish') { registryVersion = '1.2.3'; return { code: 0, stdout: '+ demo-lib@1.2.3' }; }
       return { code: 0, stdout: '' };
+    },
+    // `npm publish` va por su propio runner (stdio heredado), NO por runCommandOut.
+    runPublish: async (_cwd) => {
+      calls.publish++;
+      registryVersion = '1.2.3';
+      return { code: 0 };
     },
     runGit: async () => ({ code: 0, stdout: '' }),
     vercelRunner: (_cwd) => async (args) => {
@@ -311,9 +322,26 @@ describe('cli — flujo npm de punta a punta (detect npm por firma de librería)
     const code = await runCli([], deps);
 
     expect(code).toBe(0);
-    expect(calls.npm).toContainEqual(['publish']); // publicó
+    expect(calls.publish).toBe(1); // publicó (por el runner de stdio heredado)
     expect(calls.npm.some((a: string[]) => a[0] === 'view')).toBe(true); // consultó el registro
     expect(await readLlantas(dir)).toMatchObject({ npmIdentityConfirmed: true });
+  });
+
+  it('`npm publish` corre con stdio HEREDADO (runner dedicado), nunca por el pipe capturado de runCommandOut', async () => {
+    // El fix del fallo silencioso: si una cuenta exige confirmación interactiva en cada
+    // publish, ese prompt tiene que llegar a la terminal real. Por eso publish NO puede
+    // ir por runCommandOut (que captura stdio en un pipe), sino por su runner propio.
+    const dir = await makeNpmProject();
+    const { prompt } = scriptedPrompt([], true);
+    const { deps, calls } = makeDeps(dir, { prompt });
+
+    const code = await runCli([], deps);
+
+    expect(code).toBe(0);
+    expect(calls.publish).toBe(1); // pasó por el runner de stdio heredado
+    // runCommandOut (pipe capturado) solo se usó para `npm view`, jamás para publish.
+    expect(calls.npm.some((a: string[]) => a[0] === 'publish')).toBe(false);
+    expect(calls.npm.every((a: string[]) => a[0] === 'view')).toBe(true);
   });
 
   it('identidad y publish son confirmaciones SEPARADAS: sí a identidad + NO a publish → no publica, pero recuerda la identidad', async () => {
@@ -324,17 +352,15 @@ describe('cli — flujo npm de punta a punta (detect npm por firma de librería)
     const code = await runCli([], deps);
 
     expect(code).toBe(1);
-    expect(calls.npm.some((a: string[]) => a[0] === 'publish')).toBe(false); // dijo NO al publish → no publicó
+    expect(calls.publish).toBe(0); // dijo NO al publish → no publicó
     expect(await readLlantas(dir)).toMatchObject({ npmIdentityConfirmed: true }); // pero la identidad SÍ quedó confirmada
   });
 
   it('versión ya publicada (misma que la del registro) → gate bloquea, NO publica [§9]', async () => {
     const dir = await makeNpmProject(); // local 1.2.3
-    const npmCalls: string[][] = [];
-    const { deps } = makeDeps(dir, {
+    const { deps, calls } = makeDeps(dir, {
       // Registro ya en 1.2.3 → version-not-duplicate y version-bumped bloquean.
       runCommandOut: async (_c, _cmd, args) => {
-        npmCalls.push(args);
         if (args[0] === 'view') return { code: 0, stdout: '1.2.3\n' };
         return { code: 0, stdout: '' };
       },
@@ -343,7 +369,7 @@ describe('cli — flujo npm de punta a punta (detect npm por firma de librería)
     const code = await runCli([], deps);
 
     expect(code).toBe(1);
-    expect(npmCalls.some((a) => a[0] === 'publish')).toBe(false); // nunca publicó
+    expect(calls.publish).toBe(0); // el gate bloqueó: nunca publicó
   });
 });
 
