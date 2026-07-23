@@ -64,7 +64,12 @@ La **primera** vez pide confirmación. Después, un deploy de rutina corre de un
 
 Lee el target SSH, el directorio, el proceso y la rama del `ecosystem.config.js` (bloque `deploy`). Guarda su propio puntero de "último commit que pasó verificación" en `.llantas.json`; ese es el objetivo del rollback (un VPS no tiene historial de deployments como Vercel).
 
-Si el proyecto expone `/salud` (convención de La Guantera: `200 {"ok":true}`), lo verifica ahí. Si no, cae a un **fallback más débil** — confirma que el proceso quedó `online` en PM2 — y lo **dice explícitamente** en el output. Podés forzar el endpoint agregando `"healthUrl"` a `.llantas.json`.
+**En el primer deploy te pregunta si tu servicio expone un endpoint de salud y en qué URL**, y lo guarda en `.llantas.json` (`healthUrl`). Si lo configurás, verifica ahí (200) tras cada deploy — verificación **fuerte**: caza un servicio que arrancó pero responde 500.
+
+Si lo saltás, cae al **fallback débil**: solo confirma que el proceso quedó `online` en PM2. **Ojo:** ese fallback nunca hace HTTP, así que **no distingue "vivo" de "vivo pero roto"** — un deploy que sirve 500 lo daría por bueno. Por eso, cuando la verificación es débil:
+
+- Las Llantas lo **grita** con una advertencia imposible de perder (no una nota al pie), y
+- **NO avanza `lastGoodCommit`** — el puntero de rollback solo se mueve con una verificación **fuerte**. Así la seguridad del rollback es estructural: si nunca configurás `healthUrl`, el puntero simplemente nunca avanza (nunca apunta a un commit que no se confirmó de verdad), en vez de dar un falso positivo.
 
 ### npm publish
 

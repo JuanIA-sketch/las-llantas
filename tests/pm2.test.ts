@@ -91,9 +91,11 @@ describe('pm2 deployer — deploy (§6)', () => {
 });
 
 describe('pm2 deployer — verify (§6)', () => {
-  it('/salud responde 200 → ok', async () => {
+  it('/salud responde 200 → ok, verificación FUERTE (no weak)', async () => {
     const d = createPm2Deployer(deps({ httpGet: async () => ({ status: 200 }) }));
-    expect((await d.verify({ ok: true })).ok).toBe(true);
+    const r = await d.verify({ ok: true });
+    expect(r.ok).toBe(true);
+    expect(r.weak).toBeFalsy();
   });
 
   it('/salud 503 tras reintentos → not ok', async () => {
@@ -102,12 +104,13 @@ describe('pm2 deployer — verify (§6)', () => {
     expect(r.ok).toBe(false);
   });
 
-  it('sin /salud → fallback de estado PM2 online, marcado como verificación DÉBIL', async () => {
+  it('sin /salud → fallback de estado PM2 online, marcado weak:true (no distingue vivo de vivo-pero-roto)', async () => {
     const remote = fakeRemote({ jlist: online });
     const d = createPm2Deployer(deps({ healthUrl: undefined }, remote));
     const r = await d.verify({ ok: true });
     expect(r.ok).toBe(true);
-    expect(r.detail).toMatch(/d[ée]bil/i);
+    expect(r.weak).toBe(true);
+    expect(r.detail).toBeTruthy();
   });
 
   it('sin /salud → NUNCA hace un GET HTTP (no adivina una URL del sshTarget), va directo al fallback PM2', async () => {

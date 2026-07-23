@@ -92,8 +92,21 @@ export async function runDeploy(deps: PipelineDeps): Promise<PipelineResult> {
   // Fase 3 — verificación real (el deployer aplica sus reintentos).
   const verify = await deps.deployer.verify(deploy);
   if (verify.ok) {
-    await deps.onVerified(deploy);
-    deps.log('✅ Desplegado y verificado.');
+    if (verify.weak) {
+      // Verificación DÉBIL: el proceso corre, pero no confirmamos que responda bien.
+      // NO se persiste: el puntero de rollback NO puede avanzar a un commit no confirmado.
+      // La seguridad del rollback queda garantizada por la ESTRUCTURA, no por que alguien
+      // lea el aviso. Un "ok" débil no es un "ok" de verdad: hay que gritarlo.
+      deps.log('');
+      deps.log('⚠️  VERIFICACIÓN DÉBIL — no puedo confirmar que el servicio responde bien,');
+      deps.log(`    solo que el proceso sigue corriendo${verify.detail ? ` (${verify.detail})` : ''}.`);
+      deps.log('    El puntero de rollback NO avanzó: queda en el último deploy con verificación fuerte.');
+      deps.log('    Configurá un endpoint /salud (healthUrl) para una verificación real.');
+      deps.log('✅ Desplegado — proceso corriendo, pero SIN verificación fuerte (ver aviso ⚠️ arriba).');
+    } else {
+      await deps.onVerified(deploy);
+      deps.log('✅ Desplegado y verificado.');
+    }
     return { ok: true, stage: 'done', gate, deploy, verify };
   }
 

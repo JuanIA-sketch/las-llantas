@@ -28,7 +28,7 @@ node bin/las-llantas.js --dry-run   # el binario real
 
 ## Decisiones resueltas (no re-litigar)
 - Escaneo de secretos = `detectSecrets` de La Alarma (`src/core/secret-patterns.ts`, vendorizado de la-alarma@0.1.1) sobre el working tree — NO gitleaks, sin dependencia nueva.
-- VPS sin `/salud`: se acepta el fallback débil (estado PM2 online), marcado explícito en el output.
+- VPS sin `/salud`: verificación DÉBIL (fallback de estado PM2 online, marcado `weak:true`). El primer deploy PM2 pregunta por el endpoint de salud. Una verificación débil se avisa PROMINENTE **y NO avanza `lastGoodCommit`** (el puntero de rollback solo se mueve con verificación fuerte — seguridad estructural, no dependiente de leer el aviso).
 - Estado en dos archivos por ciclo de vida: `.llantas.json` (COMMITEADO: type, npmIdentityConfirmed, vercelDeployedOnce, healthUrl — set-once) y `.llantas.state.json` (GITIGNOREADO: lastGoodCommit, mutable cada deploy). Separados para que un deploy PM2 no ensucie el working tree y rompa el git-clean del siguiente. El target SSH sale del `ecosystem.config.js`, no se guarda en ninguno.
 - Rollback PM2 vuelve a la RAMA (`git checkout <branch> && git reset --hard <commit>`), no a un SHA suelto (evita detached HEAD que rompería el próximo `git pull --ff-only`).
 - npm: identidad (una vez) y publish (always-confirm) son DOS confirmaciones separadas.

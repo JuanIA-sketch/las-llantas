@@ -19,6 +19,12 @@ export interface VerifyResult {
   /** Qué se verificó (URL con healthPath, endpoint, versión…). */
   url?: string;
   detail?: string;
+  /**
+   * true si la verificación fue DÉBIL: confirma que el proceso corre, pero NO que
+   * responda bien (ej. fallback de estado PM2 sin /salud). El pipeline lo muestra
+   * como advertencia prominente — un "ok" débil no es un "ok" de verdad.
+   */
+  weak?: boolean;
 }
 
 export interface RollbackResult {

@@ -94,6 +94,17 @@ describe('runDeploy — orquestador de las 3 fases (§6, §8, §9)', () => {
     expect(flags.onVerified).toBe(1);
   });
 
+  it('verify DÉBIL (weak) aunque sea ok → advertencia PROMINENTE y NO persiste (no avanza el puntero de rollback)', async () => {
+    const { deployer } = makeDeployer({ verify: { ok: true, weak: true, detail: 'solo proceso online' } });
+    const { deps, log, flags } = makeDeps({ deployer });
+    const r = await runDeploy(deps);
+
+    expect(r).toMatchObject({ ok: true, stage: 'done' });
+    expect(flags.onVerified).toBe(0); // verificación débil NO persiste
+    expect(log.join('\n')).toMatch(/VERIFICACIÓN DÉBIL/);
+    expect(log.join('\n')).toMatch(/rollback NO avanzó/i);
+  });
+
   it('deploy falla → no verifica ni persiste, termina en stage deploy [§9]', async () => {
     const { deployer, calls } = makeDeployer({ deploy: { ok: false, detail: 'vercel falló' } });
     const { deps, flags } = makeDeps({ deployer });

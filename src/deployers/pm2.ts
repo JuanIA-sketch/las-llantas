@@ -85,9 +85,10 @@ export function createPm2Deployer(deps: Pm2DeployerDeps): Deployer {
       }
     }
 
-    // Fallback más débil: solo confirma que el proceso quedó online, no que responda bien.
-    const weak =
-      'verificación DÉBIL: sin /salud, solo confirmo que el proceso PM2 quedó online (no que responda correctamente)';
+    // Fallback más débil: solo confirma que el proceso quedó online. NUNCA hace HTTP,
+    // así que no distingue "vivo" de "vivo pero devolviendo 500". Va marcado weak:true.
+    const weakDetail =
+      'sin /salud configurado, solo confirmo que el proceso PM2 quedó online — NO que el servicio responda bien';
     const target = `pm2:${deps.processName}`;
     try {
       const res = await withRetries(() => pm2Online(), {
@@ -96,9 +97,9 @@ export function createPm2Deployer(deps: Pm2DeployerDeps): Deployer {
         sleep: retry.sleep,
         isOk: (r) => r.online,
       });
-      return { ok: res.online, detail: weak, url: target };
+      return { ok: res.online, weak: true, detail: weakDetail, url: target };
     } catch {
-      return { ok: false, detail: weak, url: target };
+      return { ok: false, weak: true, detail: weakDetail, url: target };
     }
   }
 

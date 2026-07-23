@@ -215,6 +215,26 @@ async function runPm2Flow(
     },
   };
 
+  // Primera corrida pm2 = todavía no hay puntero de "último commit bueno".
+  const needsConfirmation = state.lastGoodCommit == null;
+
+  // Primer deploy y sin /salud configurado: preguntar explícitamente por el endpoint
+  // de salud, para no quedar en el fallback débil por default silencioso (§6).
+  if (!dryRun && needsConfirmation && config.healthUrl == null) {
+    const answer = (
+      await deps.prompt.ask(
+        '¿Tu servicio expone un endpoint de salud (ej. https://tu-dominio/salud)? Pegá la URL completa, o Enter para saltar:',
+      )
+    ).trim();
+    if (answer !== '') {
+      config = updateConfig(config, { healthUrl: answer });
+      await saveConfig(configPath, config, deps.configFs);
+      deps.log(`Anotado: verificaré ${answer} tras cada deploy.`);
+    } else {
+      deps.log('⚠️  Sin endpoint de salud: la verificación va a ser DÉBIL (solo estado del proceso, no que responda bien).');
+    }
+  }
+
   const deployer = createPm2Deployer({
     runRemote,
     httpGet: deps.httpGet,
@@ -225,9 +245,6 @@ async function runPm2Flow(
     hasBuild,
     lastGoodCommit: state.lastGoodCommit,
   });
-
-  // Primera corrida pm2 = todavía no hay puntero de "último commit bueno".
-  const needsConfirmation = state.lastGoodCommit == null;
 
   const result = await runDeploy({
     runGate: () => runGate(GATE_PROFILES.pm2, gateRunners),

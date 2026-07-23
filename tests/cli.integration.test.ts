@@ -118,7 +118,20 @@ async function readLlantasState(dir: string): Promise<any> {
   return JSON.parse(await readFile(join(dir, '.llantas.state.json'), 'utf8'));
 }
 
-/** Repo git real con firma PM2 y .gitignore que cubre el estado mutable, committeado limpio. */
+/** lastGoodCommit del estado, o undefined si el archivo no existe (deploy débil nunca lo escribe). */
+async function lastGoodCommitOf(dir: string): Promise<string | undefined> {
+  try {
+    return JSON.parse(await readFile(join(dir, '.llantas.state.json'), 'utf8')).lastGoodCommit;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Repo git real con firma PM2, `.gitignore` que cubre el estado mutable, y un
+ * `.llantas.json` con healthUrl ya committeado — así los deploys son FUERTES
+ * (verifican por HTTP) y persisten lastGoodCommit al estado gitignoreado.
+ */
 async function makePm2GitRepo(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'llantas-pm2git-'));
   created.push(dir);
@@ -129,6 +142,11 @@ async function makePm2GitRepo(): Promise<string> {
   await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }), 'utf8');
   await writeFile(join(dir, 'ecosystem.config.js'), 'module.exports = {};\n', 'utf8');
   await writeFile(join(dir, 'index.js'), 'console.log("srv");\n', 'utf8');
+  await writeFile(
+    join(dir, '.llantas.json'),
+    JSON.stringify({ type: 'pm2', healthUrl: 'https://demo.example.com/salud' }),
+    'utf8',
+  );
   await writeFile(join(dir, '.gitignore'), '.llantas.state.json\nnode_modules/\n', 'utf8');
   git(['add', '.']);
   git(['commit', '-q', '-m', 'init']);
@@ -184,38 +202,85 @@ describe('cli — flujo Vercel de punta a punta (fs real, borde externo mockeado
 });
 
 describe('cli — flujo VPS+PM2 de punta a punta (ecosystem real detectado, borde SSH/HTTP mockeado)', () => {
-  it('primera corrida: gate (incl. SSH) → deploy remoto → verifica → persiste lastGoodCommit', async () => {
+  it('primera corrida con /salud: gate → deploy → verificación FUERTE (200) → persiste lastGoodCommit', async () => {
     const dir = await makePm2Project();
-    const { prompt } = scriptedPrompt([], true);
-    const { deps, log, calls } = makeDeps(dir, { prompt });
+    // Configuramos /salud en la pregunta del primer deploy → verificación fuerte.
+    const { prompt } = scriptedPrompt(['https://demo.example.com/salud'], true);
+    const { deps, calls } = makeDeps(dir, { prompt });
 
     const code = await runCli([], deps);
 
     expect(code).toBe(0);
     expect(calls.ssh.some((c: string) => c.includes('git pull'))).toBe(true); // desplegó en el server
     expect(calls.ssh).toContain('echo llantas-ok'); // corrió el check de SSH del gate
+    expect(calls.http).toContain('https://demo.example.com/salud'); // verificó por HTTP (fuerte)
     // El puntero de rollback va al estado MUTABLE gitignoreado, NO al .llantas.json commiteado.
     expect(await readLlantasState(dir)).toMatchObject({ lastGoodCommit: 'a1b2c3d4e5f6' });
-    expect(log.join('\n')).toMatch(/d[ée]bil/i); // sin /salud → fallback marcado como débil
+    expect(await readLlantas(dir)).toMatchObject({ healthUrl: 'https://demo.example.com/salud' });
   });
 
-  it('dos deploys PM2 exitosos seguidos NO dejan el working tree sucio (lastGoodCommit va al estado gitignoreado)', async () => {
-    const dir = await makePm2GitRepo();
+  it('dos deploys PM2 FUERTES seguidos NO dejan el working tree sucio (lastGoodCommit va al estado gitignoreado)', async () => {
+    const dir = await makePm2GitRepo(); // ya trae .llantas.json con healthUrl committeado → deploys fuertes
     const porcelain = () => execFileSync('git', ['status', '--porcelain'], { cwd: dir }).toString().trim();
     expect(porcelain()).toBe(''); // arranca limpio
 
-    // Deploy 1: primera corrida (confirma). runGit REAL para que git-clean vea el árbol de verdad.
+    // Deploy 1: primera corrida (confirma). runGit REAL + verificación fuerte (httpGet 200 por default).
     const run1 = makeDeps(dir, { prompt: scriptedPrompt([], true).prompt, runGit: gitRunner });
     expect(await runCli([], run1.deps)).toBe(0);
-    expect(porcelain()).toBe(''); // limpio tras deploy 1 (el estado está gitignoreado)
+    expect(porcelain()).toBe(''); // limpio tras deploy 1 (lastGoodCommit está en el archivo gitignoreado)
 
-    // Deploy 2: ya hay lastGoodCommit → NO debe confirmar. Le paso confirm=false a propósito:
-    // si preguntara, el deploy se cancelaría (exit 1) y este assert fallaría.
+    // Deploy 2: ya hay lastGoodCommit → NO confirma. confirm=false a propósito: si preguntara, cancelaría.
     const run2 = makeDeps(dir, { prompt: scriptedPrompt([], false).prompt, runGit: gitRunner });
     expect(await runCli([], run2.deps)).toBe(0);
     expect(porcelain()).toBe(''); // sigue limpio tras deploy 2
 
     expect((await readLlantasState(dir)).lastGoodCommit).toBeTruthy();
+  });
+
+  it('BUG contenido estructuralmente: sin /salud, app 500 pero proceso online → "exitoso" DÉBIL, advertencia VISIBLE, y NO avanza lastGoodCommit', async () => {
+    const dir = await makePm2Project();
+    // Saltamos /salud ('') → fallback débil. La app está rota (500), pero el fallback no consulta HTTP.
+    const { prompt } = scriptedPrompt([''], true);
+    const { deps, log } = makeDeps(dir, { prompt, httpGet: async () => ({ status: 500 }) });
+
+    const code = await runCli([], deps);
+
+    expect(code).toBe(0); // "exitoso"… pero débil
+    const out = log.join('\n');
+    expect(out).toMatch(/VERIFICACIÓN DÉBIL/); // advertencia imposible de perder
+    expect(out).toMatch(/rollback NO avanzó/i);
+    // El fix estructural: el puntero de rollback NO se movió a un commit no confirmado.
+    expect(await lastGoodCommitOf(dir)).toBeUndefined();
+  });
+
+  it('dos deploys DÉBILES seguidos → lastGoodCommit NO cambia (nunca avanza sin verificación fuerte)', async () => {
+    const dir = await makePm2Project();
+    expect(await lastGoodCommitOf(dir)).toBeUndefined(); // arranca sin puntero
+
+    // Deploy 1 débil (salta /salud, proceso online): "exitoso" pero no persiste.
+    const run1 = makeDeps(dir, { prompt: scriptedPrompt([''], true).prompt });
+    expect(await runCli([], run1.deps)).toBe(0);
+    const after1 = await lastGoodCommitOf(dir);
+
+    // Deploy 2 débil también: sigue sin avanzar.
+    const run2 = makeDeps(dir, { prompt: scriptedPrompt([''], true).prompt });
+    expect(await runCli([], run2.deps)).toBe(0);
+    const after2 = await lastGoodCommitOf(dir);
+
+    expect(after1).toBeUndefined();
+    expect(after2).toBe(after1); // no cambió entre uno y otro
+  });
+
+  it('el fix en acción: con /salud configurado en el primer deploy, un 500 hace fallar la verificación FUERTE (no lo acepta)', async () => {
+    const dir = await makePm2Project();
+    // Esta vez SÍ damos la URL de salud; la app devuelve 500.
+    const { prompt } = scriptedPrompt(['https://demo.example.com/salud'], true);
+    const { deps } = makeDeps(dir, { prompt, httpGet: async () => ({ status: 500 }) });
+
+    const code = await runCli([], deps);
+
+    expect(code).toBe(1); // verificación fuerte falla → NO exitoso
+    expect(await readLlantas(dir)).toMatchObject({ healthUrl: 'https://demo.example.com/salud' }); // quedó configurado
   });
 
   it('--dry-run PM2: corre el gate (incl. SSH) y no despliega', async () => {
