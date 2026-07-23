@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   runGate,
+  formatGateResults,
   GATE_PROFILES,
   type GateProfile,
   type GateCheckRunner,
@@ -69,6 +70,24 @@ describe('runGate — evaluador del pre-flight gate (§6, §11.4)', () => {
     await expect(runGate(GATE_PROFILES.vercel, { tests: ok, 'git-clean': ok })).rejects.toThrow(
       /secret-scan/,
     );
+  });
+});
+
+describe('formatGateResults — desglose legible por regla', () => {
+  it('muestra cada regla con su estado y detalle', () => {
+    const gate = {
+      passed: false,
+      results: [
+        { id: 'tests' as const, ok: true, blocking: true },
+        { id: 'secret-scan' as const, ok: false, blocking: true, detail: 'secreto en .env:2' },
+      ],
+    };
+    const out = formatGateResults(gate);
+    expect(out).toContain('tests');
+    expect(out).toContain('secret-scan');
+    expect(out).toContain('secreto en .env:2');
+    expect(out).toMatch(/🔴/);
+    expect(out).toMatch(/🟢/);
   });
 });
 

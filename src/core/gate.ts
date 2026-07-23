@@ -90,3 +90,10 @@ export async function runGate(
   const passed = results.every((r) => r.ok || !r.blocking);
   return { passed, results };
 }
+
+/** Desglose legible del gate: una línea por regla con su estado y detalle. Función pura. */
+export function formatGateResults(gate: GateResult): string {
+  return gate.results
+    .map((r) => `   ${r.ok ? '🟢' : '🔴'} ${r.id}${r.detail ? ` — ${r.detail}` : ''}`)
+    .join('\n');
+}

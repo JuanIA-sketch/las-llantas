@@ -6,6 +6,7 @@
 import { readFile, writeFile, readdir } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import type { ConfigFs } from '../core/config.js';
+import { gitRunner } from './exec.js';
 
 /** ConfigFs real: read devuelve null si el archivo no existe. */
 export const realConfigFs: ConfigFs = {
@@ -52,6 +53,21 @@ export async function listTextFiles(cwd: string): Promise<string[]> {
   }
   await walk(cwd);
   return out;
+}
+
+/**
+ * Archivos a escanear en busca de secretos. Preferimos los git-TRACKEADOS
+ * (`git ls-files`): eso respeta `.gitignore`, así NO escanea secretos locales que
+ * nunca salen del repo (`.env.local`, `storageState.json`, etc.) — solo lo que de
+ * verdad se commitea y despliega. Como la regla `git-clean` ya exige cero archivos
+ * sin trackear, no queda hueco. Si no es repo git, cae al walk del working tree.
+ */
+export async function listScannableFiles(cwd: string): Promise<string[]> {
+  const tracked = await gitRunner(cwd, ['ls-files']);
+  if (tracked.code === 0) {
+    return tracked.stdout.split('\n').map((s) => s.trim()).filter((s) => s !== '');
+  }
+  return listTextFiles(cwd);
 }
 
 /** Lee un archivo de texto relativo a `cwd`; archivos grandes se saltan (string vacío). */

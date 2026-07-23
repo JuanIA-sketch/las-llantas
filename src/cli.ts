@@ -311,7 +311,7 @@ async function loadEcosystemModule(cwd: string): Promise<unknown> {
 
 /** Arma las deps reales y corre el cli. Devuelve el exit code. */
 export async function main(argv: string[], cwd: string): Promise<number> {
-  const { realConfigFs, listEntries, readPackageJson, listTextFiles, readTextFile } = await import(
+  const { realConfigFs, listEntries, readPackageJson, listScannableFiles, readTextFile } = await import(
     './runners/fs.js'
   );
   const { nodeRunCommand, nodeRunCommandOut, gitRunner, vercelRunner } = await import('./runners/exec.js');
@@ -328,7 +328,7 @@ export async function main(argv: string[], cwd: string): Promise<number> {
       configFs: realConfigFs,
       listEntries,
       readPackageJson,
-      scanFs: { listFiles: listTextFiles, readFile: readTextFile },
+      scanFs: { listFiles: listScannableFiles, readFile: readTextFile },
       runCommand: nodeRunCommand,
       runCommandOut: nodeRunCommandOut,
       runGit: gitRunner,

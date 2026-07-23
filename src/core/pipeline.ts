@@ -13,6 +13,7 @@
  *   (funcionó o no), nunca en silencio (§9).
  */
 
+import { formatGateResults } from './gate.js';
 import type { Deployer } from './types.js';
 import type { GateResult } from './gate.js';
 import type { DeployOutcome, VerifyResult, RollbackResult } from './types.js';
@@ -50,6 +51,8 @@ export async function runDeploy(deps: PipelineDeps): Promise<PipelineResult> {
   // no toca producción, así que corre SIEMPRE, incluso en dry-run. Parte de la
   // confianza que da --dry-run es saber si el gate habría bloqueado el deploy (§8).
   const gate = await deps.runGate();
+  const gateReport = formatGateResults(gate);
+  if (gateReport) deps.log(`Pre-flight:\n${gateReport}`);
 
   // --dry-run: mostrar el plan + el veredicto real del gate, y salir SIN ejecutar
   // deploy/verify/rollback (§8).

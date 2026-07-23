@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli, type CliDeps } from '../src/cli.js';
-import { realConfigFs, listEntries, readPackageJson, listTextFiles, readTextFile } from '../src/runners/fs.js';
+import { realConfigFs, listEntries, readPackageJson, listScannableFiles, readTextFile } from '../src/runners/fs.js';
 import { SYNTHETIC_TOKEN } from './support/synthetic-secrets.js';
 
 const created: string[] = [];
@@ -53,7 +53,7 @@ function makeDeps(cwd: string, over: Partial<CliDeps> = {}): { deps: CliDeps; lo
     configFs: realConfigFs,
     listEntries,
     readPackageJson,
-    scanFs: { listFiles: listTextFiles, readFile: readTextFile },
+    scanFs: { listFiles: listScannableFiles, readFile: readTextFile },
     // Fakes del borde externo: nunca se toca producción real.
     runCommand: async () => ({ code: 0 }),
     runCommandOut: async (_cwd, _command, args) => {
