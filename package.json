@@ -1,0 +1,44 @@
+{
+  "name": "las-llantas",
+  "version": "0.1.0",
+  "description": "El cierre del pipeline: despacha cada proyecto a producción (Vercel, VPS+PM2 o npm) con pre-flight gate, verificación real y rollback. 100% determinístico, sin capa de IA.",
+  "type": "module",
+  "bin": {
+    "llantas": "bin/las-llantas.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JuanIA-sketch/las-llantas.git"
+  },
+  "keywords": [
+    "deploy",
+    "vercel",
+    "pm2",
+    "npm-publish",
+    "cli",
+    "tdd",
+    "claude-code"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc",
+    "dev": "tsx src/cli.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "MIT",
+  "author": "Juan Carlos Caro (JuanIA-sketch)",
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}

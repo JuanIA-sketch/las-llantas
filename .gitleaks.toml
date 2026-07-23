@@ -1,0 +1,17 @@
+# Configuración de gitleaks para el repo de Las Llantas.
+# gitleaks (el motor que usa La Alarma) auto-carga este archivo al escanear la raíz.
+#
+# Único propósito: que la auditoría no se marque con nuestros propios secretos
+# SINTÉTICOS (forma de secreto real, valor inventado por concatenación). Viven SOLO
+# en tests/support/synthetic-secrets.ts; los *.test.ts los importan, no los definen
+# inline. Por eso el allowlist cubre solo esa ruta — un secreto real en un *.test.ts
+# SÍ sería detectado.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Helpers de test con secretos sintéticos (no reales)"
+paths = [
+  '''tests/support/.*''',
+]
