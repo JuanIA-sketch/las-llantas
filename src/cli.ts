@@ -17,7 +17,11 @@ import {
   loadConfig,
   saveConfig,
   updateConfig,
+  loadState,
+  saveState,
+  updateState,
   buildDetectProbe,
+  STATE_FILENAME,
   type ConfigFs,
   type ProbeFs,
   type LlantasConfig,
@@ -189,6 +193,18 @@ async function runPm2Flow(
   const scripts = (pkg?.scripts ?? {}) as Record<string, unknown>;
   const hasBuild = typeof scripts.build === 'string';
 
+  // `lastGoodCommit` vive en el estado MUTABLE gitignoreado (cambia en cada deploy);
+  // no en `.llantas.json` (commiteado), para no ensuciar el árbol deploy a deploy.
+  const statePath = join(deps.cwd, STATE_FILENAME);
+  const state = await loadState(statePath, deps.configFs);
+
+  const ignored = await deps.runGit(deps.cwd, ['check-ignore', STATE_FILENAME]);
+  if (ignored.code === 1) {
+    deps.log(
+      `⚠️  Agregá \`${STATE_FILENAME}\` a tu .gitignore — guarda el puntero de rollback y NO debe commitearse (si no, cada deploy dejaría el working tree sucio).`,
+    );
+  }
+
   const gateRunners: Partial<Record<GateRuleId, GateCheckRunner>> = {
     ...sharedGateRunners(deps),
     'ssh-reachable': async () => {
@@ -207,11 +223,11 @@ async function runPm2Flow(
     branch,
     healthUrl: config.healthUrl,
     hasBuild,
-    lastGoodCommit: config.lastGoodCommit,
+    lastGoodCommit: state.lastGoodCommit,
   });
 
   // Primera corrida pm2 = todavía no hay puntero de "último commit bueno".
-  const needsConfirmation = config.lastGoodCommit == null;
+  const needsConfirmation = state.lastGoodCommit == null;
 
   const result = await runDeploy({
     runGate: () => runGate(GATE_PROFILES.pm2, gateRunners),
@@ -220,7 +236,7 @@ async function runPm2Flow(
     confirm: () => deps.prompt.confirm('¿Despliego a producción en el VPS (PM2)?'),
     dryRun,
     onVerified: async (deploy) => {
-      await saveConfig(configPath, updateConfig(config, { lastGoodCommit: deploy.commit }), deps.configFs);
+      await saveState(statePath, updateState(state, { lastGoodCommit: deploy.commit }), deps.configFs);
     },
     log: deps.log,
     planText: PM2_PLAN,

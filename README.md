@@ -75,21 +75,30 @@ El pre-flight más estricto, porque **publicar no tiene vuelta atrás**:
 - La **primera** vez confirma la identidad del paquete (una sola pregunta, se recuerda).
 - **Siempre** pide confirmación explícita antes de `npm publish` — pregunta separada de la anterior.
 
-## `.llantas.json`
+## Estado en disco: dos archivos por ciclo de vida
 
-Archivo local **sin datos sensibles, seguro de commitear** (sin llaves, sin passwords). Guarda solo:
+Las Llantas separa lo que se fija una vez de lo que cambia en cada deploy:
+
+**`.llantas.json`** — **seguro de commitear** (sin llaves ni passwords). Valores que se fijan una vez y no cambian deploy a deploy:
 
 ```jsonc
 {
   "type": "vercel | pm2 | npm",   // tipo recordado (detección o confirmación)
-  "vercelDeployedOnce": true,      // vercel: ya hubo un deploy exitoso
-  "lastGoodCommit": "<sha>",       // pm2: objetivo del rollback
+  "vercelDeployedOnce": true,      // vercel: ya hubo un deploy exitoso (flag set-once)
   "npmIdentityConfirmed": true,    // npm: identidad confirmada una vez
   "healthUrl": "https://..."       // pm2 (opcional): endpoint /salud
 }
 ```
 
-Si El Chasis ya deja este archivo (o la firma correcta) al scaffoldear, Las Llantas detecta todo desde el día uno. Cuando un proyecto no calza limpio en ningún tipo, pregunta **una sola vez** ("no reconozco este proyecto, ¿es Vercel, VPS o npm?") y recuerda la respuesta.
+**`.llantas.state.json`** — **gitignorealo** (agregalo a tu `.gitignore`). Estado **mutable** que cambia en cada deploy:
+
+```jsonc
+{ "lastGoodCommit": "<sha>" }      // pm2: objetivo del rollback, se actualiza en cada deploy verificado
+```
+
+> Por qué separados: `lastGoodCommit` cambia en cada deploy de PM2. Si viviera en el archivo commiteado, cada deploy dejaría el working tree sucio y el `git-clean` del siguiente deploy fallaría. Si el estado no está gitignoreado, Las Llantas te avisa para que lo agregues.
+
+Si El Chasis ya deja `.llantas.json` (o la firma correcta) al scaffoldear, Las Llantas detecta todo desde el día uno. Cuando un proyecto no calza limpio en ningún tipo, pregunta **una sola vez** ("no reconozco este proyecto, ¿es Vercel, VPS o npm?") y recuerda la respuesta.
 
 ## No-negociables
 

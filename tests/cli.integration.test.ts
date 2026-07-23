@@ -1,9 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCli, type CliDeps } from '../src/cli.js';
 import { realConfigFs, listEntries, readPackageJson, listScannableFiles, readTextFile } from '../src/runners/fs.js';
+import { gitRunner } from '../src/runners/exec.js';
 import { SYNTHETIC_TOKEN } from './support/synthetic-secrets.js';
 
 const created: string[] = [];
@@ -112,6 +114,27 @@ async function readLlantas(dir: string): Promise<any> {
   return JSON.parse(await readFile(join(dir, '.llantas.json'), 'utf8'));
 }
 
+async function readLlantasState(dir: string): Promise<any> {
+  return JSON.parse(await readFile(join(dir, '.llantas.state.json'), 'utf8'));
+}
+
+/** Repo git real con firma PM2 y .gitignore que cubre el estado mutable, committeado limpio. */
+async function makePm2GitRepo(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), 'llantas-pm2git-'));
+  created.push(dir);
+  const git = (args: string[]) => execFileSync('git', args, { cwd: dir });
+  git(['init', '-q', '-b', 'main']);
+  git(['config', 'user.email', 'test@example.com']);
+  git(['config', 'user.name', 'Test']);
+  await writeFile(join(dir, 'package.json'), JSON.stringify({ name: 'demo', version: '1.0.0' }), 'utf8');
+  await writeFile(join(dir, 'ecosystem.config.js'), 'module.exports = {};\n', 'utf8');
+  await writeFile(join(dir, 'index.js'), 'console.log("srv");\n', 'utf8');
+  await writeFile(join(dir, '.gitignore'), '.llantas.state.json\nnode_modules/\n', 'utf8');
+  git(['add', '.']);
+  git(['commit', '-q', '-m', 'init']);
+  return dir;
+}
+
 describe('cli — flujo Vercel de punta a punta (fs real, borde externo mockeado)', () => {
   it('--dry-run: corre el gate real, muestra el plan y NO despliega', async () => {
     const dir = await makeVercelProject();
@@ -171,8 +194,28 @@ describe('cli — flujo VPS+PM2 de punta a punta (ecosystem real detectado, bord
     expect(code).toBe(0);
     expect(calls.ssh.some((c: string) => c.includes('git pull'))).toBe(true); // desplegó en el server
     expect(calls.ssh).toContain('echo llantas-ok'); // corrió el check de SSH del gate
-    expect(await readLlantas(dir)).toMatchObject({ lastGoodCommit: 'a1b2c3d4e5f6' });
+    // El puntero de rollback va al estado MUTABLE gitignoreado, NO al .llantas.json commiteado.
+    expect(await readLlantasState(dir)).toMatchObject({ lastGoodCommit: 'a1b2c3d4e5f6' });
     expect(log.join('\n')).toMatch(/d[ée]bil/i); // sin /salud → fallback marcado como débil
+  });
+
+  it('dos deploys PM2 exitosos seguidos NO dejan el working tree sucio (lastGoodCommit va al estado gitignoreado)', async () => {
+    const dir = await makePm2GitRepo();
+    const porcelain = () => execFileSync('git', ['status', '--porcelain'], { cwd: dir }).toString().trim();
+    expect(porcelain()).toBe(''); // arranca limpio
+
+    // Deploy 1: primera corrida (confirma). runGit REAL para que git-clean vea el árbol de verdad.
+    const run1 = makeDeps(dir, { prompt: scriptedPrompt([], true).prompt, runGit: gitRunner });
+    expect(await runCli([], run1.deps)).toBe(0);
+    expect(porcelain()).toBe(''); // limpio tras deploy 1 (el estado está gitignoreado)
+
+    // Deploy 2: ya hay lastGoodCommit → NO debe confirmar. Le paso confirm=false a propósito:
+    // si preguntara, el deploy se cancelaría (exit 1) y este assert fallaría.
+    const run2 = makeDeps(dir, { prompt: scriptedPrompt([], false).prompt, runGit: gitRunner });
+    expect(await runCli([], run2.deps)).toBe(0);
+    expect(porcelain()).toBe(''); // sigue limpio tras deploy 2
+
+    expect((await readLlantasState(dir)).lastGoodCommit).toBeTruthy();
   });
 
   it('--dry-run PM2: corre el gate (incl. SSH) y no despliega', async () => {

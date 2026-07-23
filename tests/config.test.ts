@@ -4,6 +4,9 @@ import {
   loadConfig,
   saveConfig,
   updateConfig,
+  loadState,
+  saveState,
+  updateState,
   buildDetectProbe,
   type ConfigFs,
   type ProbeFs,
@@ -29,8 +32,8 @@ describe('parseConfig / loadConfig', () => {
   });
 
   it('archivo presente → parseado', async () => {
-    const fs: ConfigFs = { read: async () => '{"type":"pm2","lastGoodCommit":"abc"}', write: async () => {} };
-    expect(await loadConfig('/x/.llantas.json', fs)).toEqual({ type: 'pm2', lastGoodCommit: 'abc' });
+    const fs: ConfigFs = { read: async () => '{"type":"pm2","vercelDeployedOnce":true}', write: async () => {} };
+    expect(await loadConfig('/x/.llantas.json', fs)).toEqual({ type: 'pm2', vercelDeployedOnce: true });
   });
 });
 
@@ -43,13 +46,39 @@ describe('saveConfig / updateConfig', () => {
   });
 
   it('updateConfig hace merge sin pisar otros campos y marca el schema', () => {
-    const current = { schema: 1, type: 'pm2' as const, lastGoodCommit: 'viejo' };
-    const next = updateConfig(current, { lastGoodCommit: 'nuevo' });
-    expect(next).toEqual({ schema: 1, type: 'pm2', lastGoodCommit: 'nuevo' });
+    const current = { schema: 1, type: 'pm2' as const, npmIdentityConfirmed: true };
+    const next = updateConfig(current, { vercelDeployedOnce: true });
+    expect(next).toEqual({ schema: 1, type: 'pm2', npmIdentityConfirmed: true, vercelDeployedOnce: true });
   });
 
   it('updateConfig sobre config vacío setea el schema', () => {
     expect(updateConfig({}, { type: 'vercel' })).toMatchObject({ schema: 1, type: 'vercel' });
+  });
+});
+
+describe('estado mutable (.llantas.state.json) — separado del config commiteado', () => {
+  it('loadState: archivo ausente → estado vacío', async () => {
+    const fs: ConfigFs = { read: async () => null, write: async () => {} };
+    expect(await loadState('/x/.llantas.state.json', fs)).toEqual({});
+  });
+
+  it('loadState: archivo presente → parseado con lastGoodCommit', async () => {
+    const fs: ConfigFs = { read: async () => '{"lastGoodCommit":"a1b2c3d4"}', write: async () => {} };
+    expect(await loadState('/x/.llantas.state.json', fs)).toEqual({ lastGoodCommit: 'a1b2c3d4' });
+  });
+
+  it('saveState escribe JSON que round-trippea', async () => {
+    let written = '';
+    const fs: ConfigFs = { read: async () => null, write: async (_p, c) => { written = c; } };
+    await saveState('/x/.llantas.state.json', { schema: 1, lastGoodCommit: 'abc123' }, fs);
+    expect(JSON.parse(written)).toEqual({ schema: 1, lastGoodCommit: 'abc123' });
+  });
+
+  it('updateState hace merge y marca el schema', () => {
+    expect(updateState({ lastGoodCommit: 'viejo' }, { lastGoodCommit: 'nuevo' })).toEqual({
+      schema: 1,
+      lastGoodCommit: 'nuevo',
+    });
   });
 });
 
